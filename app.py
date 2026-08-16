@@ -1,6 +1,10 @@
 import streamlit as st
 import pandas as pd
-from layout_engine import default_room_template, normalize_layout, render_floorplan, figure_to_png_bytes, validate_sums
+from layout_engine import (
+    default_grid_template, compute_rooms_geometry, validate_spans,
+    alignment_self_check, render_grid_floorplan, figure_to_png_bytes,
+    MAX_BEAM_SPAN_DEFAULT,
+)
 
 st.set_page_config(page_title="AI Vastu Architect & Structural Expert", page_icon="🏗️", layout="wide")
 
@@ -105,75 +109,102 @@ else:
 st.markdown("---")
 
 # =========================================================================
-# SECTION 3: ACCURATE TO-SCALE 2D LAYOUT (code-generated, not AI image)
+# SECTION 3: STRUCTURALLY-ALIGNED TO-SCALE 2D LAYOUT (real column grid)
 # =========================================================================
-st.header("3. 📐 Accurate To-Scale 2D Layout (Real Math — No AI Image Guesswork)")
+st.header("3. 📐 Structurally-Aligned To-Scale 2D Layout")
 st.caption(
-    "Ye section AI image-generator use NAHI karta. Ye Python code se seedha "
-    "to-scale drawing banata hai, jisme room dimensions ka SUM hamesha plot "
-    "ke width/length ke exactly barabar hota hai — koi mismatch possible nahi."
+    "Ye engine AI image-generator use NAHI karta. Saare rooms ek SHARED grid "
+    "(x-lines/y-lines) se bante hain — isliye columns hamesha vertically "
+    "aligned rehte hain (real RCC continuity), aur har room ka span 15 ft "
+    "(editable) se zyada nahi jaane diya jata bina warning ke."
 )
 
-if "room_df" not in st.session_state or st.session_state.get("_last_plot_size") != (width, length):
-    st.session_state.room_df = pd.DataFrame(default_room_template(width, length))
-    st.session_state._last_plot_size = (width, length)
+if "grid_template" not in st.session_state:
+    st.session_state.grid_template = default_grid_template()
+if "_last_plot_size3" not in st.session_state or st.session_state._last_plot_size3 != (width, length):
+    st.session_state._last_plot_size3 = (width, length)
 
-st.markdown(
-    "**Room list edit karein (optional):** `width_ratio` aur `height_ratio` sirf "
-    "*proportions* hain (actual ft nahi) — inhe app khud normalize karke exact "
-    "feet me convert karta hai, taaki dimensions kabhi mismatch na ho. Same "
-    "`row` number wale cells ek hi horizontal strip me side-by-side aayenge."
+max_span = st.slider(
+    "Max Safe Beam Span (ft)", min_value=8.0, max_value=20.0,
+    value=MAX_BEAM_SPAN_DEFAULT, step=0.5,
+    help="Iske upar span wale rooms ke liye warning aayegi (intermediate column ya deeper beam chahiye).",
 )
 
-edited_df = st.data_editor(
-    st.session_state.room_df,
-    num_rows="dynamic",
-    use_container_width=True,
-    column_config={
-        "row": st.column_config.NumberColumn("Row #", help="Same row number = same horizontal strip", step=1),
-        "room": st.column_config.TextColumn("Room Name"),
-        "width_ratio": st.column_config.NumberColumn("Width Ratio", help="Relative proportion within its row"),
-        "height_ratio": st.column_config.NumberColumn("Height Ratio", help="Relative proportion of total length (use same value for all cells in a row)"),
-    },
-    key="room_editor",
-)
+with st.expander("🔧 Grid & Room List Edit Karein (Advanced, optional)"):
+    st.markdown(
+        "**x_ratios** = West→East bay proportions (comma-separated), "
+        "**y_ratios** = North→South bay proportions (comma-separated). "
+        "Rooms in bays ko *merge* karke bante hain — `col_start/col_end/row_start/row_end` "
+        "in ratio-lists ke INDEX hain (0-based). Kyunki sab rooms same grid use karte hain, "
+        "column alignment hamesha guaranteed rehta hai — chahe aap kuch bhi edit karein."
+    )
+    x_ratios_str = st.text_input("x_ratios (West→East)", value=", ".join(str(v) for v in st.session_state.grid_template["x_ratios"]))
+    y_ratios_str = st.text_input("y_ratios (North→South)", value=", ".join(str(v) for v in st.session_state.grid_template["y_ratios"]))
+    rooms_df = st.data_editor(
+        pd.DataFrame(st.session_state.grid_template["rooms"]),
+        num_rows="dynamic",
+        use_container_width=True,
+        column_config={
+            "name": st.column_config.TextColumn("Room Name"),
+            "col_start": st.column_config.NumberColumn("Col Start (idx)", step=1),
+            "col_end": st.column_config.NumberColumn("Col End (idx)", step=1),
+            "row_start": st.column_config.NumberColumn("Row Start (idx)", step=1),
+            "row_end": st.column_config.NumberColumn("Row End (idx)", step=1),
+        },
+        key="rooms_editor",
+    )
 
 col_a, col_b = st.columns([1, 1])
 with col_a:
-    render_btn = st.button("🖼️ Generate To-Scale Drawing", type="primary", use_container_width=True)
+    render_btn = st.button("🖼️ Generate Structurally-Aligned Drawing", type="primary", use_container_width=True)
 with col_b:
-    reset_btn = st.button("↺ Reset to Default Template", use_container_width=True)
+    reset_btn = st.button("↺ Reset to Corrected Default Template", use_container_width=True)
 
 if reset_btn:
-    st.session_state.room_df = pd.DataFrame(default_room_template(width, length))
+    st.session_state.grid_template = default_grid_template()
     st.rerun()
 
 if render_btn:
-    room_list = edited_df.to_dict("records")
-    # basic cleanup — drop empty rows, ensure numeric types
-    room_list = [
-        r for r in room_list
-        if r.get("room") and r.get("width_ratio") and r.get("height_ratio")
-    ]
-    if not room_list:
-        st.error("Kam se kam ek valid room row chahiye.")
-    else:
-        layout_rows = normalize_layout(room_list, width, length)
-        fig = render_floorplan(layout_rows, width, length, facing=facing)
+    try:
+        x_ratios = [float(v.strip()) for v in x_ratios_str.split(",") if v.strip()]
+        y_ratios = [float(v.strip()) for v in y_ratios_str.split(",") if v.strip()]
+        rooms = rooms_df.dropna().to_dict("records")
+        rooms = [
+            {**r, "col_start": int(r["col_start"]), "col_end": int(r["col_end"]),
+             "row_start": int(r["row_start"]), "row_end": int(r["row_end"])}
+            for r in rooms if r.get("name")
+        ]
+        template = {"x_ratios": x_ratios, "y_ratios": y_ratios, "rooms": rooms}
+
+        rooms_geo, x_lines, y_lines = compute_rooms_geometry(template, width, length)
+        fig = render_grid_floorplan(rooms_geo, x_lines, y_lines, width, length, facing=facing)
         st.pyplot(fig, use_container_width=True)
 
-        # Self-check so you can SEE the math is correct
-        check = validate_sums(layout_rows, width, length)
-        with st.expander("✅ Dimension Self-Check (transparency)"):
-            st.write(f"Sum of row heights = **{check['total_height']}'** vs Plot Length = **{check['plot_length']}'** → Match: {check['height_match']}")
-            st.write(f"Row-wise width sums = **{check['row_width_sums']}** vs Plot Width = **{check['plot_width']}'** → Match: {check['width_match']}")
+        # --- Transparency: prove alignment + flag long spans ---
+        align_check = alignment_self_check(rooms_geo, x_lines, y_lines)
+        span_warnings = validate_spans(rooms_geo, max_span=max_span)
+
+        with st.expander("✅ Structural Self-Check", expanded=bool(span_warnings)):
+            if align_check["all_aligned"]:
+                st.success("Column alignment: PASS — har room boundary ek shared grid-line par hai (structural continuity guaranteed).")
+            else:
+                st.error(f"Column alignment: FAIL — {align_check['misaligned_rooms']}")
+
+            if span_warnings:
+                st.warning(f"{len(span_warnings)} beam-span issue(s) mile:")
+                for w in span_warnings:
+                    st.write(w)
+            else:
+                st.success(f"Beam spans: PASS — koi bhi room {max_span:.0f}ft se zyada span nahi kar raha.")
 
         png_bytes = figure_to_png_bytes(fig)
         st.download_button(
-            "⬇️ Download To-Scale Floor Plan (PNG)",
+            "⬇️ Download Structurally-Aligned Floor Plan (PNG)",
             data=png_bytes,
-            file_name=f"to_scale_floorplan_{int(width)}x{int(length)}.png",
+            file_name=f"aligned_floorplan_{int(width)}x{int(length)}.png",
             mime="image/png",
         )
+    except Exception as e:
+        st.error(f"Layout banane me error: {e}. Ratios/rooms table check karein.")
 else:
-    st.info("Table adjust karke '🖼️ Generate To-Scale Drawing' dabayein.")
+    st.info("Default template already Vastu + structurally corrected hai — seedha button dabayein, ya expander me edit karein.")

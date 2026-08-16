@@ -13,17 +13,29 @@ Har prompt India-specific Vastu texts (Mayamatam, Vishwakarma Prakash, etc.)
 aur Structural IS Codes (IS 456, IS 875, IS 1893, IS 13920, SP 34) ka
 reference leta hai.
 
-### 🆕 Accurate To-Scale 2D Layout Generator
+### 🆕 Structurally-Aligned To-Scale 2D Layout Engine (v2)
 AI text-to-image tools (Midjourney/DALL-E/etc.) room dimensions ka real
-math check nahi karte — labels aur actual drawn size mismatch ho sakta hai.
-Isliye app me ek **code-based layout engine** (`layout_engine.py`) bhi hai
-jo matplotlib se ek EXACT to-scale drawing banata hai:
-- Rooms ko horizontal "rows" (strips) me arrange kiya jata hai.
-- Har row ki height aur har cell ki width ko *ratios* se normalize karke
-  actual feet me convert kiya jata hai — is wajah se sum hamesha
-  plot ke width/length ke *exactly* barabar hota hai (guaranteed, no drift).
-- Room list editable hai (Streamlit table) — apna khud ka layout bana sakte hain.
-- Self-check panel dikhata hai ki dimensions match kar rahe hain ya nahi.
+math check nahi karte, aur ek naive "row-slicing" approach bhi galat
+nikla (columns row-to-row align nahi karte, bilkul jaisa ek real 30x50
+bungalow plan me dekha gaya tha — Master Bedroom/Kitchen boundary ek
+jagah, Pooja/Dining boundary kahi aur).
+
+Isliye `layout_engine.py` me ab ek **shared structural grid engine** hai:
+- Poore plot ke liye EK hi set of x-lines (West→East) aur y-lines
+  (North→South) hoti hai. Har room in SAME lines se banta hai — isliye
+  koi bhi do adjacent room ki common wall/column line hamesha ek grid-line
+  par hogi (column continuity **mathematically guaranteed**, koi drift
+  possible nahi).
+- Har room ka width/height ek **Max Beam Span** limit (default 15 ft,
+  editable) ke against check hota hai — exceed karne par warning milti
+  hai ("intermediate column ya deeper beam chahiye").
+- Column markers (C1 = perimeter, C2 = interior junction) automatically
+  un exact points par draw hote hain jaha rooms milte hain — real column
+  schedule jaisa.
+- Default template ek corrected 30'x50' North-facing bungalow hai jisme
+  entrance/parking North side par hai (facing se match), aur Vastu zoning
+  (Pooja NE, Kitchen SE, Master Bedroom SW) sahi hai.
+- Self-check panel dikhata hai: alignment PASS/FAIL + span warnings.
 
 > ⚠️ Ye tool sirf AI-prompts / conceptual to-scale sketch banata hai —
 > actual construction ke liye licensed Architect / Structural Engineer se
